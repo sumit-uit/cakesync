@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
@@ -33,6 +34,7 @@ import com.mobilegamma.cakesync.orders.PhoneCalendar
 import com.mobilegamma.cakesync.orders.Quote
 import com.mobilegamma.cakesync.menu.CardOptions
 import com.mobilegamma.cakesync.menu.ColourNames
+import com.mobilegamma.cakesync.menu.SizeCol
 import com.mobilegamma.cakesync.menu.DesignGrouper
 import com.mobilegamma.cakesync.menu.DesignInput
 import com.mobilegamma.cakesync.menu.MenuCard
@@ -50,6 +52,7 @@ import com.mobilegamma.cakesync.drive.DriveClient
 import com.mobilegamma.cakesync.share.Captions
 import com.mobilegamma.cakesync.share.Catalog
 import com.mobilegamma.cakesync.share.Sharer
+import com.mobilegamma.cakesync.scan.CakeReader
 import com.mobilegamma.cakesync.scan.PhotoScanner
 import com.mobilegamma.cakesync.work.SyncScheduler
 import com.mobilegamma.cakesync.work.SyncWorker
@@ -434,18 +437,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun nameFor(photos: List<Photo>, hero: Photo): String {
         val labels = photos.flatMap { PhotoStore.parseLabels(it.labels) }
             .groupBy({ it.first }, { it.second }).map { (k, v) -> k to v.max() }
-        val colour = runCatching {
-            val bmp = PhotoEditor.loadScaled(getApplication(), hero.uri, 64)
-            val x0 = bmp.width / 5
-            val y0 = bmp.height / 5
-            val w = bmp.width - 2 * x0
-            val h = bmp.height - 2 * y0
-            val px = IntArray(w * h)
-            bmp.getPixels(px, 0, w, x0, y0, w, h)
-            ColourNames.dominant(px)
-        }.getOrNull()
+        val colour = runCatching { ColourNames.dominant(centrePixels(hero.uri, 64)) }.getOrNull()
         val categoryName = categories.byId(hero.category)?.name ?: "Cake"
         return MenuNamer.title(labels, colour, singular(categoryName))
+    }
+
+    /** The middle of a photo (a fifth trimmed off each side), where the cake usually is. */
+    private fun centrePixels(uri: Uri, maxSide: Int): IntArray {
+        val bmp = PhotoEditor.loadScaled(getApplication(), uri, maxSide)
+        val x0 = bmp.width / 5
+        val y0 = bmp.height / 5
+        val w = bmp.width - 2 * x0
+        val h = bmp.height - 2 * y0
+        return IntArray(w * h).also { bmp.getPixels(it, 0, w, x0, y0, w, h) }
+    }
+
+    /** Reads a customer's cake photo on the phone (no internet): what's on it, and the icing colours. */
+    suspend fun readCakePhoto(uri: Uri): Pair<Map<String, Int>, List<String>> = withContext(Dispatchers.IO) {
+        val found = runCatching { CakeReader(getApplication()).read(PhotoEditor.loadScaled(getApplication(), uri, 640)) }
+            .onFailure { Log.w("CakeSync", "Cake models failed", it) }.getOrDefault(emptyMap())
+        val colours = runCatching { ColourNames.icingColours(centrePixels(uri, 128)) }.getOrDefault(emptyList())
+        found to colours
     }
 
     /** Uses [photo] as the cover of a suggested design. */
@@ -551,8 +563,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
 
     /** Ends the first-run introduction, optionally saving the business name. */
-    fun finishIntro(businessName: String?) {
+    fun finishIntro(businessName: String?, servings: List<SizeCol> = emptyList()) {
         settings.onboarded = true
+        if (servings.isNotEmpty()) menuStore.update { it.copy(settings = it.settings.copy(servings = servings)) }
         // New bakeries set up how they take orders right after the intro.
         if (!orderStore.load().settings.configured) _state.update { it.copy(ordersSetupOpen = true) }
         businessName?.trim()?.takeIf { it.isNotEmpty() }?.let { saveBrandKit(brandKit().copy(businessName = it)) }

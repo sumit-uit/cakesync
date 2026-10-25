@@ -110,4 +110,13 @@ class MenuLogicTest {
         assertEquals(4, groups.size)
         assertEquals(2L, DesignGrouper.hero(inputs.take(2)).id)
     }
+
+    @Test
+    fun icingColoursInPhoto() {
+        fun px(r: Int, g: Int, b: Int, n: Int) = IntArray(n) { (0xFF shl 24) or (r shl 16) or (g shl 8) or b }
+        // Sky-blue top tier, yellow bottom tier, white clouds, a little red topper and chocolate.
+        val pixels = px(140, 200, 235, 40) + px(240, 200, 40, 30) + px(250, 248, 245, 20) + px(220, 30, 30, 5) + px(100, 60, 30, 5)
+        assertEquals(listOf("Blue", "Yellow"), ColourNames.icingColours(pixels))
+        assertEquals(emptyList<String>(), ColourNames.icingColours(IntArray(0)))
+    }
 }

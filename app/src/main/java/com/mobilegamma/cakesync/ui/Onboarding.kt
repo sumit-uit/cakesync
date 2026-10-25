@@ -15,23 +15,26 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mobilegamma.cakesync.menu.SizeCol
+import com.mobilegamma.cakesync.menu.TableTemplate
 import com.mobilegamma.cakesync.ui.theme.CakeBrush
 import kotlinx.coroutines.launch
 
-/** Three-step first-run introduction. */
+/** Four-step first-run introduction. */
 @Composable
 fun Onboarding(
     hasPhotoPermission: Boolean,
     onGrantPhotos: () -> Unit,
-    onFinish: (businessName: String?) -> Unit,
+    onFinish: (businessName: String?, servings: List<SizeCol>) -> Unit,
 ) {
-    val pager = rememberPagerState { 3 }
+    val pager = rememberPagerState { 4 }
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
+    var servings by remember { mutableStateOf(TableTemplate.ROUND.sizes) }
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(24.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = { onFinish(name) }) { Text("Skip") }
+                TextButton(onClick = { onFinish(name, servings) }) { Text("Skip") }
             }
             HorizontalPager(pager, modifier = Modifier.weight(1f)) { page ->
                 Column(
@@ -49,6 +52,11 @@ fun Onboarding(
                             "🔒", "Private by design",
                             "Photos are checked on your phone, never sent anywhere to be analysed. Only the ones you " +
                                 "choose go to your own Google Drive.",
+                        )
+                        3 -> Triple(
+                            "🍰", "How many does each size serve?",
+                            "Used to suggest the right size, or a tiered cake, when a customer tells you their guest count. " +
+                                "You can change these later in Menu → Prices.",
                         )
                         else -> Triple(
                             "🏷", "Make it yours",
@@ -76,12 +84,19 @@ fun Onboarding(
                             label = { Text("Business name, e.g. Sweet Crumbs") },
                             modifier = Modifier.fillMaxWidth(),
                         )
+                        3 -> servings.forEachIndexed { i, s ->
+                            OutlinedTextField(
+                                value = s.serves, singleLine = true,
+                                onValueChange = { v -> servings = servings.toMutableList().also { it[i] = s.copy(serves = v) } },
+                                label = { Text("${s.label} cake serves") }, modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    repeat(3) { i ->
+                    repeat(4) { i ->
                         val active = pager.currentPage == i
                         val width by animateDpAsState(if (active) 24.dp else 8.dp, label = "dot")
                         val color by animateColorAsState(
@@ -91,9 +106,9 @@ fun Onboarding(
                         Box(Modifier.height(8.dp).width(width).clip(CircleShape).background(color))
                     }
                 }
-                val last = pager.currentPage == 2
+                val last = pager.currentPage == 3
                 Button(
-                    onClick = { if (last) onFinish(name) else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } },
+                    onClick = { if (last) onFinish(name, servings) else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } },
                     modifier = Modifier.height(52.dp),
                 ) { Text(if (last) "Get started" else "Next") }
             }

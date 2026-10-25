@@ -70,6 +70,8 @@ data class MenuSettings(
     val note: String = "Made to order · 50% advance to confirm",
     val levels: List<DesignLevel> = DesignLevels.defaults,
     val extras: List<Extra> = emptyList(),
+    /** How many people each size serves (asked during onboarding); a price table's own "serves" wins. */
+    val servings: List<SizeCol> = TableTemplate.ROUND.sizes,
 ) {
     fun level(id: String?): DesignLevel = levels.firstOrNull { it.id == id } ?: levels.firstOrNull() ?: DesignLevels.defaults.first()
 }
@@ -219,9 +221,20 @@ object ColourNames {
         return h
     }
 
+    /**
+     * Icing colours in a cake photo: named colours covering at least [minShare] of [pixels],
+     * biggest first. White, black and chocolate need no colouring, so they're left out.
+     */
+    fun icingColours(pixels: IntArray, minShare: Double = 0.12): List<String> {
+        val names = pixels.asSequence().mapNotNull { p -> name((p shr 16) and 0xFF, (p shr 8) and 0xFF, p and 0xFF) }.toList()
+        return names.groupingBy { it }.eachCount()
+            .filter { it.value >= names.size * minShare && it.key !in setOf("White", "Black", "Chocolate") }
+            .entries.sortedByDescending { it.value }.map { it.key }
+    }
+
     /** The most common named colour among [pixels] (ARGB ints), ignoring black backgrounds. */
     fun dominant(pixels: IntArray): String? = pixels.asSequence()
-        .mapNotNull { p -> name((p shr 16) and 0xFF, (p shr 8) and 0xFF, p and 0xFF) }
+        .mapNotNull { p -> name((p shr 16) and 0xFF, (p shr 8) and 0xFF, p and 0xFF) }.toList()
         .filter { it != "Black" }
         .groupingBy { it }.eachCount()
         .maxByOrNull { it.value }?.key
