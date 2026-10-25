@@ -81,6 +81,9 @@ class OrderStore(context: Context) {
         moreTiers = o.optJSONArray("moreTiers").objects().map { Tier(it.optString("size"), it.optString("flavour")) },
         options = o.optJSONArray("options")?.strings()?.toSet() ?: emptySet(),
         optionCounts = o.optJSONObject("optionCounts")?.let { c -> c.keys().asSequence().associateWith { c.getInt(it) } } ?: emptyMap(),
+        topperPlan = o.optJSONObject("topperPlan")?.let { p ->
+            p.keys().asSequence().associateWith { k -> p.getJSONArray(k).let { a -> (0 until a.length()).map { a.getInt(it) } } }
+        } ?: emptyMap(),
         occasion = o.optString("occasion"),
         message = o.optString("message"),
         allergies = o.optString("allergies"),
@@ -103,6 +106,7 @@ class OrderStore(context: Context) {
         .put("flavour", o.flavour).put("levelId", o.levelId ?: "").put("options", JSONArray(o.options.toList()))
         .put("moreTiers", JSONArray(o.moreTiers.map { JSONObject().put("size", it.size).put("flavour", it.flavour) }))
         .put("optionCounts", JSONObject(o.optionCounts))
+        .put("topperPlan", JSONObject(o.topperPlan.mapValues { (_, counts) -> JSONArray(counts) }))
         .put("occasion", o.occasion).put("message", o.message).put("allergies", o.allergies).put("notes", o.notes)
         .put("answers", JSONObject(o.answers)).put("references", JSONArray(o.references))
         .put("advancePaid", o.advancePaid).put("status", o.status.name).put("createdAt", o.createdAt).put("fromBooking", o.fromBooking)

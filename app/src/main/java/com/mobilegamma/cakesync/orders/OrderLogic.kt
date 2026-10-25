@@ -91,6 +91,12 @@ data class Order(
     val options: Set<String> = emptySet(),
     /** How many of a chosen option, e.g. "Colour" → 2; missing means 1. */
     val optionCounts: Map<String, Int> = emptyMap(),
+    /**
+     * A multi-tier cake's toppers, per tier: option name → count on each tier, bottom tier
+     * first. [optionCounts] stays the total the price uses; this is the plan the baker sets
+     * tier by tier and the bake sheet prints.
+     */
+    val topperPlan: Map<String, List<Int>> = emptyMap(),
     val occasion: String = "",
     val message: String = "",
     val allergies: String = "",
@@ -109,10 +115,76 @@ data class Order(
 ) {
     val tiers: List<Tier> get() = listOf(Tier(size, flavour)) + moreTiers
 
+    /** 1 for a single cake, 2 for a two-tier cake, … */
+    val tierCount: Int get() = 1 + moreTiers.size
+
+    /** The top tier, where toppers usually go (0 when the cake has a single tier). */
+    val topTier: Int get() = tierCount - 1
+
     fun count(option: String): Int = optionCounts[option] ?: 1
+
+    /** How many [extra] toppers sit on tier [tier] (0-based). */
+    fun toppersOn(tier: Int, extra: String): Int = topperPlan[extra]?.getOrNull(tier) ?: 0
+
+    /**
+     * Puts [count] of [extra] on one tier, and keeps the order's total for it (the number the
+     * price uses) in step. Removing every topper drops the option from the order.
+     */
+    fun withToppers(tier: Int, extra: String, count: Int): Order {
+        val perTier = (topperPlan[extra].orEmpty() + List(tierCount) { 0 }).take(tierCount).toMutableList()
+        perTier[tier.coerceIn(0, tierCount - 1)] = count.coerceAtLeast(0)
+        val total = perTier.sum()
+        val plan = if (total > 0) topperPlan + (extra to perTier) else topperPlan - extra
+        return copy(
+            topperPlan = plan,
+            options = if (total > 0) options + extra else options - extra,
+            optionCounts = if (total > 0) optionCounts + (extra to total) else optionCounts - extra,
+        )
+    }
+
+    /**
+     * Puts options that are counted but have no tier plan yet (orders saved before tiered
+     * toppers, or orders read from the web form) on the top tier, so the tier buttons show the
+     * count the price already includes.
+     */
+    fun seedingToppers(topperNames: Collection<String>): Order {
+        var seeded = this
+        topperNames.filter { it in options && it !in topperPlan }.forEach { name ->
+            val n = optionCounts[name] ?: 0
+            if (n > 0) seeded = seeded.withToppers(seeded.topTier, name, n)
+        }
+        return seeded
+    }
+
+    /** Grows or shrinks the cake to [tiers] tiers, keeping tiers and topper plans that still fit. */
+    fun withTierCount(tiers: Int): Order {
+        val n = tiers.coerceIn(1, 8)
+        val more = if (n - 1 <= moreTiers.size) moreTiers.take(n - 1)
+        else moreTiers + List(n - 1 - moreTiers.size) { Tier(flavour = flavour) }
+        val plan = topperPlan.mapValues { (_, counts) -> (counts + List(n) { 0 }).take(n) }
+        val gone = plan.filterValues { counts -> counts.none { it > 0 } }.keys
+        val counts = optionCounts.toMutableMap()
+        plan.forEach { (name, perTier) -> counts[name] = perTier.sum() }
+        gone.forEach { counts.remove(it) }
+        return copy(
+            moreTiers = more,
+            topperPlan = plan - gone,
+            options = if (gone.isEmpty()) options else options - gone,
+            optionCounts = counts,
+        )
+    }
 
     /** "Eggless, Colour ×2" */
     fun optionsText(): String = options.joinToString(", ") { if (count(it) > 1) "$it ×${count(it)}" else it }
+
+    /** "2 on tier 3, 1 on tier 2" — where the toppers go, when a plan is set. */
+    fun topperPlanText(menuExtras: List<Extra>): String = topperPlan.entries
+        .filter { (_, counts) -> counts.any { it > 0 } }
+        .sortedBy { menuExtras.indexOfFirst { e -> e.name == it.key } }
+        .joinToString("; ") { (name, counts) ->
+            val where = counts.withIndex().filter { it.value > 0 }.joinToString(", ") { "${it.value} on tier ${it.index + 1}" }
+            "${name.replace("Topper ", "")}: $where"
+        }
 
     /** "8" Rasmalai Fondant", or "8" Vanilla + 6" Rasmalai" for tiered cakes. */
     fun cakeSummary(levelName: String?): String = listOfNotNull(
@@ -136,25 +208,31 @@ object Quote {
     fun basePrice(order: Order, table: PriceTable?): Double? =
         order.tiers.map { tierPrice(it, table) ?: return null }.sum()
 
-    /** A percentage in an extra's price text, e.g. "+20%" → 20. */
-    fun percentOf(extra: Extra): Double? = Regex("""(\d+(?:\.\d+)?)\s*%""").find(extra.price)?.groupValues?.get(1)?.toDouble()
+    /** A percentage in an extra's price, e.g. "+20%" → 20. */
+    fun percentOf(extra: Extra): Double? = extra.percentValue
 
-    /** A fixed amount in an extra's price text, e.g. "$15 per page" → 15 (ranges use the low end). */
-    fun amountOf(extra: Extra): Double? =
-        if (percentOf(extra) != null) null else Regex("""(\d+(?:\.\d+)?)""").find(extra.price)?.groupValues?.get(1)?.toDouble()
+    /** A fixed amount in an extra's price, e.g. "$15 per page" → 15 (ranges use the low end). */
+    fun amountOf(extra: Extra): Double? = extra.eachValue
+
+    /** A price broken into the part that comes from the cake and the part from the options. */
+    data class Breakdown(val tiers: Double, val options: Double, val total: Double)
 
     /**
      * Base price (at least the design level's "from" price) plus chosen options: percentages
-     * apply to the base, fixed amounts are added once per count. Null when the base isn't known.
+     * apply to the base, fixed amounts are added once per count (6 toppers × $8). Null when the
+     * base isn't known.
      */
-    fun calculate(order: Order, table: PriceTable?, menu: MenuSettings): Double? {
+    fun breakdown(order: Order, table: PriceTable?, menu: MenuSettings): Breakdown? {
         val level = menu.levels.firstOrNull { it.id == order.levelId }
         val base = listOfNotNull(basePrice(order, table), level?.fromPrice).maxOrNull() ?: return null
         val chosen = menu.extras.filter { it.name in order.options }
         val percent = chosen.mapNotNull { percentOf(it) }.sum()
         val fixed = chosen.sumOf { (amountOf(it) ?: 0.0) * order.count(it.name) }
-        return base * (1 + percent / 100.0) + fixed
+        val options = base * percent / 100.0 + fixed
+        return Breakdown(base, options, base + options)
     }
+
+    fun calculate(order: Order, table: PriceTable?, menu: MenuSettings): Double? = breakdown(order, table, menu)?.total
 
     fun total(order: Order, table: PriceTable?, menu: MenuSettings): Double? = order.price ?: calculate(order, table, menu)
 
@@ -362,6 +440,7 @@ object OrderMessage {
         append("Cake: ${order.cakeSummary(levelName)}\n")
         if (order.designTitle.isNotBlank()) append("Design: ${order.designTitle}\n")
         if (order.options.isNotEmpty()) append("Options: ${order.optionsText()}\n")
+        order.topperPlanText(menu.extras).takeIf { it.isNotBlank() }?.let { append("Toppers: $it\n") }
         if (order.occasion.isNotBlank()) append("Occasion: ${order.occasion}\n")
         if (order.message.isNotBlank()) append("Message on cake: ${order.message}\n")
         if (order.allergies.isNotBlank()) append("Allergies: ${order.allergies}\n")

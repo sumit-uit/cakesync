@@ -39,6 +39,27 @@ class MenuLogicTest {
     }
 
     @Test
+    fun optionPricesArePerUnitOrPercent() {
+        val each = Extra("Topper simple", each = 8.0).priced("$")
+        assertEquals("$8 each", each.price)
+        assertEquals(8.0, each.eachValue!!, 1e-9)
+        assertTrue(each.counted)
+        assertNull(each.percentValue)
+        val pct = Extra("Eggless", percent = 20.0).priced("₹")
+        assertEquals("+20%", pct.price)
+        assertEquals(20.0, pct.percentValue!!, 1e-9)
+        assertNull(pct.eachValue)
+        assertTrue(!pct.counted)
+        // Menus saved before options had a number are read from their text.
+        assertEquals(15.0, Extra("Edible image", "$15 per page").eachValue!!, 1e-9)
+        assertEquals(20.0, Extra("Eggless", "+20%").percentValue!!, 1e-9)
+        assertNull(Extra("Eggless", "+20%").eachValue)
+        assertNull(Extra("Something", "").eachValue)
+        // A per-unit price survives a save and reload unchanged.
+        assertEquals(each, each.priced("$"))
+    }
+
+    @Test
     fun parsesAPastedCakePriceList() {
         val text = listOf(
             "Cake specialties",

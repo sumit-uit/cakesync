@@ -19,6 +19,16 @@ class PhotoSuggestTest {
         assertEquals(listOf(Tier(flavour = "Vanilla")), o.moreTiers)
         assertEquals(mapOf("Colour" to 2, "Stacking" to 1, "Topper simple" to 7, "Topper complex" to 1, "Topper super complex" to 1, "Edible print + cut" to 1), o.optionCounts)
         assertEquals(extras.map { it.name }.toSet(), o.options)
+        // Toppers are recorded per tier (the top one), not just as a total.
+        assertEquals(
+            mapOf(
+                "Topper simple" to listOf(0, 7),
+                "Topper complex" to listOf(0, 1),
+                "Topper super complex" to listOf(0, 1),
+            ),
+            o.topperPlan,
+        )
+        assertEquals("simple: 7 on tier 2; complex: 1 on tier 2; super complex: 1 on tier 2", o.topperPlanText(extras))
         assertTrue(note, note.startsWith("Photo: 2 tiers, Blue + Yellow, 1 3D character, 1 complex topper, 7 simple toppers, edible print."))
     }
 

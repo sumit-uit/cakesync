@@ -45,5 +45,6 @@ object ServingPlanner {
         val flavours = order.tiers.map { it.flavour }
         val tiers = option.sizes.mapIndexed { i, s -> Tier(s, flavours.getOrNull(i)?.ifBlank { null } ?: order.flavour) }
         return order.copy(size = tiers.first().size, flavour = tiers.first().flavour, moreTiers = tiers.drop(1))
+            .withTierCount(tiers.size)
     }
 }

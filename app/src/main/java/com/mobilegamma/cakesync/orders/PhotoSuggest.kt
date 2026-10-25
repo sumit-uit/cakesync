@@ -14,30 +14,32 @@ object PhotoSuggest {
     const val SUPER = "topper_super"
     const val PRINT = "edible_print"
 
+    /** One thing the photo showed, and the menu option that charges for it. */
+    private data class Pick(val what: String, val extra: Extra?, val count: Int, val onTop: Boolean = false)
+
     /** [found] maps the labels above to counts; [colours] are the icing colours. Returns the new order and a note. */
     fun apply(order: Order, found: Map<String, Int>, colours: List<String>, extras: List<Extra>): Pair<Order, String> {
         fun extra(vararg words: String) = extras.firstOrNull { e -> words.all { e.name.contains(it, true) } }
         val tiers = found[TIERS] ?: 0
-        val wanted = listOf(
-            "colour" to ((extra("colour") ?: extra("color")) to colours.size),
-            "stacking" to (extra("stack") to (tiers - 1)),
-            "simple topper" to (extra("topper", "simple") to (found[SIMPLE] ?: 0)),
-            "complex topper" to (extra("topper", "complex")?.takeUnless { it.name.contains("super", true) } to (found[COMPLEX] ?: 0)),
-            "3D character topper" to (extra("topper", "super") to (found[SUPER] ?: 0)),
+        // Toppers sit on the top tier; colours, stacking and prints belong to the whole cake.
+        val picks = listOf(
+            Pick("colour", extra("colour") ?: extra("color"), colours.size),
+            Pick("stacking", extra("stack"), tiers - 1),
+            Pick("simple topper", extra("topper", "simple"), found[SIMPLE] ?: 0, onTop = true),
+            Pick("complex topper", extra("topper", "complex")?.takeUnless { it.name.contains("super", true) }, found[COMPLEX] ?: 0, onTop = true),
+            Pick("3D character topper", extra("topper", "super"), found[SUPER] ?: 0, onTop = true),
             // Prints are priced per page: one page holds several.
-            "print" to (extra("print") to if ((found[PRINT] ?: 0) > 0) 1 else 0),
+            Pick("print", extra("print"), if ((found[PRINT] ?: 0) > 0) 1 else 0),
         )
         var o = order
-        if (tiers >= 2) {
-            val more = o.moreTiers.take(tiers - 1)
-            o = o.copy(moreTiers = more + List(tiers - 1 - more.size) { Tier(flavour = o.flavour) })
-        }
+        if (tiers >= 2) o = o.withTierCount(tiers)
         val missing = mutableListOf<String>()
-        for ((what, pair) in wanted) {
-            val (e, n) = pair
-            if (n <= 0) continue
-            if (e == null) { missing += what; continue }
-            o = o.copy(options = o.options + e.name, optionCounts = o.optionCounts + (e.name to n))
+        for (pick in picks) {
+            if (pick.count <= 0) continue
+            val e = pick.extra
+            if (e == null) { missing += pick.what; continue }
+            o = if (pick.onTop) o.withToppers(o.topTier, e.name, pick.count)
+            else o.copy(options = o.options + e.name, optionCounts = o.optionCounts + (e.name to pick.count))
         }
         val seen = listOfNotNull(
             tiers.takeIf { it > 0 }?.let { if (it == 1) "1 tier" else "$it tiers" },
