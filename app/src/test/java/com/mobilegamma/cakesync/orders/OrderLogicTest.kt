@@ -44,6 +44,69 @@ class OrderLogicTest {
     }
 
     @Test
+    fun countsPerUnitOptionsAndBreaksThePriceDown() {
+        val costing = menu.copy(extras = listOf(Extra("Topper simple", each = 8.0), Extra("Eggless", percent = 20.0)))
+        // 10" + 6" Rasmalai: 130 + 75. No text parsing: the price really is 8.0 per topper.
+        var order = Order("t", size = "10\"", flavour = "Rasmalai", moreTiers = listOf(Tier("6\"", "Rasmalai")))
+        assertEquals(205.0, Quote.calculate(order, table, costing)!!, 1e-9)
+        val split = Quote.breakdown(order.copy(options = setOf("Eggless")), table, costing)!!
+        assertEquals(205.0, split.tiers, 1e-9)
+        assertEquals(41.0, split.options, 1e-9)
+        assertEquals(246.0, split.total, 1e-9)
+        // 6 toppers on the top tier: 205 + 48.
+        order = order.withToppers(order.topTier, "Topper simple", 6)
+        assertEquals(listOf(0, 6), order.topperPlan["Topper simple"])
+        assertEquals(6, order.count("Topper simple"))
+        assertEquals(253.0, Quote.calculate(order, table, costing)!!, 1e-9)
+        // 2 more on the bottom tier add up: 8 toppers.
+        order = order.withToppers(0, "Topper simple", 2)
+        assertEquals(8, order.count("Topper simple"))
+        assertEquals(269.0, Quote.calculate(order, table, costing)!!, 1e-9)
+        assertEquals("simple: 2 on tier 1, 6 on tier 2", order.topperPlanText(costing.extras))
+        // Percentage extras still never count.
+        assertEquals(1, order.copy(options = order.options + "Eggless").count("Eggless"))
+        // Clearing every topper drops the option and its count.
+        order = order.withToppers(0, "Topper simple", 0).withToppers(order.topTier, "Topper simple", 0)
+        assertTrue(order.options.isEmpty())
+        assertTrue(order.topperPlan.isEmpty())
+        assertTrue(order.optionCounts.isEmpty())
+        assertEquals(205.0, Quote.calculate(order, table, costing)!!, 1e-9)
+    }
+
+    @Test
+    fun seedsTierPlansForCountsSetBeforeTieredToppers() {
+        // An order read from the web form: a topper count but no per-tier plan yet.
+        val order = Order(
+            "t", size = "8\"", flavour = "Vanilla", moreTiers = listOf(Tier("6\"", "Vanilla")),
+            options = setOf("Topper simple"), optionCounts = mapOf("Topper simple" to 3),
+        )
+        val seeded = order.seedingToppers(listOf("Topper simple"))
+        assertEquals(listOf(0, 3), seeded.topperPlan["Topper simple"])
+        assertEquals(3, seeded.count("Topper simple"))
+        // Already planned: seeding again changes nothing.
+        assertEquals(seeded, seeded.seedingToppers(listOf("Topper simple")))
+    }
+
+    @Test
+    fun tierCountKeepsTiersAndToppersInStep() {
+        // 1 → 3 tiers, toppers on the top tier, then 5 tiers and back down to 1.
+        var order = Order("t", size = "10\"", flavour = "Rasmalai").withTierCount(3)
+        assertEquals(3, order.tierCount)
+        assertEquals(listOf(Tier(flavour = "Rasmalai"), Tier(flavour = "Rasmalai")), order.moreTiers)
+        order = order.withToppers(2, "Topper simple", 4).withToppers(1, "Topper simple", 1)
+        assertEquals(5, order.count("Topper simple"))
+        assertEquals(listOf(0, 1, 4), order.topperPlan["Topper simple"])
+        assertEquals(listOf(0, 1, 4, 0, 0), order.withTierCount(5).topperPlan["Topper simple"])
+        assertEquals(5, order.withTierCount(5).count("Topper simple"))
+        // The bottom tier had no toppers, so a single-tier cake loses the option entirely.
+        order = order.withTierCount(1)
+        assertEquals(1, order.tierCount)
+        assertTrue(order.topperPlan.isEmpty())
+        assertFalse("Topper simple" in order.options)
+        assertTrue(order.optionCounts.isEmpty())
+    }
+
+    @Test
     fun tiersAndCountedExtras() {
         val costing = menu.copy(
             extras = listOf(

@@ -268,7 +268,9 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
     val table = menu.table(o.categoryId)
     val level = menu.settings.levels.firstOrNull { it.id == o.levelId }
     val calculated = viewModel.orderTotal(o.copy(price = null), menu)
-    val current = o.copy(price = Pricing.parsePrice(priceText), advancePaid = Pricing.parsePrice(advanceText) ?: 0.0)
+    // Options priced per unit whose name says "topper": counted tier by tier on a stacked cake.
+    val topperNames = menu.settings.extras.filter { it.counted && it.name.contains("topper", true) }.map { it.name }
+    val current = o.seedingToppers(topperNames).copy(price = Pricing.parsePrice(priceText), advancePaid = Pricing.parsePrice(advanceText) ?: 0.0)
 
     Dialog(onDismissRequest = { viewModel.editOrder(null) }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
@@ -334,15 +336,20 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                         }
                         val sizes = table?.sizes?.map { it.label }.orEmpty()
                         val flavours = table?.flavours?.map { it.name }.orEmpty()
+                        // Toppers among the counted options, e.g. "Topper simple".
+                        val toppers = menu.settings.extras.filter { it.name in topperNames }
                         // Tier 1 is the order's size/flavour; the rest live in moreTiers.
                         fun setTier(i: Int, t: Tier) {
                             o = if (i == 0) o.copy(size = t.size, flavour = t.flavour) else o.copy(moreTiers = o.moreTiers.toMutableList().also { it[i - 1] = t })
                         }
+                        // 1 = single cake, 2 = two tiers stacked, up to 5.
+                        ChipRow("Tiers", (1..5).map { "$it" to "$it" }, o.tierCount.toString()) { n ->
+                            o = o.seedingToppers(toppers.map { it.name }).withTierCount(n.toIntOrNull() ?: 1)
+                        }
                         o.tiers.forEachIndexed { i, t ->
-                            if (o.moreTiers.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (o.tierCount > 1) Row(verticalAlignment = Alignment.CenterVertically) {
                                 val price = Quote.tierPrice(t, table)?.let { " · " + Pricing.format(it, menu.settings.currency) } ?: ""
                                 Text("Tier ${i + 1}$price", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                                if (i > 0) TextButton(onClick = { o = o.copy(moreTiers = o.moreTiers.filterIndexed { j, _ -> j != i - 1 }) }) { Text("Remove") }
                             }
                             if (sizes.isNotEmpty()) ChipRow("Size", sizes.map { it to it }, t.size) { setTier(i, t.copy(size = it)) }
                             else OutlinedTextField(value = t.size, onValueChange = { setTier(i, t.copy(size = it)) }, singleLine = true, label = { Text("Size") }, modifier = Modifier.fillMaxWidth())
@@ -352,8 +359,18 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                                 val pan = Pan.parse(t.size) ?: r.pan
                                 TextButton(onClick = { showRecipe = r to pan }) { Text("📖 ${r.name} recipe for ${pan.label}") }
                             }
+                            if (o.tierCount > 1 && toppers.isNotEmpty()) {
+                                Text("Toppers on tier ${i + 1}", style = MaterialTheme.typography.labelMedium)
+                                FlowRowCompat {
+                                    toppers.forEach { e ->
+                                        // A count set before per-tier toppers (or by the order form) sits on the top tier.
+                                        val n = if (e.name in o.topperPlan || i != o.topTier) o.toppersOn(i, e.name)
+                                        else if (e.name in o.options) o.count(e.name) else 0
+                                        CountStepper(e.name, n) { v -> o = o.withToppers(i, e.name, v) }
+                                    }
+                                }
+                            }
                         }
-                        TextButton(onClick = { o = o.copy(moreTiers = o.moreTiers + Tier(flavour = o.flavour)) }) { Text("+ Add tier") }
                         // Guest count → the smallest single, 2-tier and 3-tier cake that feeds everyone.
                         OutlinedTextField(
                             value = guestsText, onValueChange = { guestsText = it.filter(Char::isDigit) }, singleLine = true,
@@ -372,22 +389,36 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                             }
                         }
                         ChipRow("Design level", menu.settings.levels.map { it.id to it.name }, o.levelId) { o = o.copy(levelId = it) }
-                        if (menu.settings.extras.isNotEmpty()) {
-                            Text("Options", style = MaterialTheme.typography.labelMedium)
+                        val multiTier = o.tierCount > 1
+                        val countedToppers = toppers.map { it.name }.toSet()
+                        // On a tiered cake the toppers are set above, tier by tier.
+                        val shownExtras = menu.settings.extras.filter { !(multiTier && it.name in countedToppers) }
+                        if (shownExtras.isNotEmpty()) {
+                            Text(
+                                if (multiTier && countedToppers.isNotEmpty()) "Options (toppers are set per tier above)" else "Options",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
                             FlowRowCompat {
-                                menu.settings.extras.forEach { e ->
-                                    val on = e.name in o.options
-                                    val n = o.count(e.name)
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                shownExtras.forEach { e ->
+                                    val label = "${e.name} ${e.price}".trim()
+                                    if (Quote.amountOf(e) == null) {
+                                        // A percentage applies once to the cake price, so there is nothing to count.
+                                        val on = e.name in o.options
                                         FilterChip(
                                             selected = on,
                                             onClick = { o = o.copy(options = if (on) o.options - e.name else o.options + e.name, optionCounts = o.optionCounts - e.name) },
-                                            label = { Text("${e.name} ${e.price}".trim() + if (on && n > 1) " ×$n" else "") },
+                                            label = { Text(label) },
                                         )
-                                        // Fixed-price extras can be counted (2 colours, 6 toppers); percentages apply once.
-                                        if (on && Quote.amountOf(e) != null) {
-                                            TextButton(onClick = { o = o.copy(optionCounts = o.optionCounts + (e.name to (n - 1).coerceAtLeast(1))) }) { Text("−") }
-                                            TextButton(onClick = { o = o.copy(optionCounts = o.optionCounts + (e.name to n + 1)) }) { Text("+") }
+                                    } else {
+                                        // Fixed price per unit: 2 colours, 6 toppers, 3 edible pages.
+                                        val n = if (e.name in o.options) o.count(e.name) else 0
+                                        CountStepper(label, n) { v ->
+                                            o = when {
+                                                // A topper also keeps its per-tier plan in step.
+                                                e.name in countedToppers -> o.withToppers(0, e.name, v)
+                                                v > 0 -> o.copy(options = o.options + e.name, optionCounts = o.optionCounts + (e.name to v))
+                                                else -> o.copy(options = o.options - e.name, optionCounts = o.optionCounts - e.name)
+                                            }
                                         }
                                     }
                                 }
@@ -415,6 +446,12 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                                 ?: "Pick a size and flavour (and set prices in Menu → Prices) to calculate",
                             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
                         )
+                        Quote.breakdown(o, table, menu.settings)?.takeIf { it.options > 0 }?.let { b ->
+                            Text(
+                                "Cake ${Pricing.format(b.tiers, menu.settings.currency)} + options ${Pricing.format(b.options, menu.settings.currency)}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 value = priceText, onValueChange = { priceText = it }, singleLine = true,
@@ -483,6 +520,22 @@ private fun ChipRow(label: String, options: List<Pair<String, String>>, selected
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         options.forEach { (value, text) ->
             FilterChip(selected = selected.equals(value, true), onClick = { onSelect(value) }, label = { Text(text) })
+        }
+    }
+}
+
+/** A chip that is "off" at 0 and shows − n + once it is on: 6 toppers, 2 colours. */
+@Composable
+private fun CountStepper(label: String, count: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FilterChip(
+            selected = count > 0,
+            onClick = { onChange(if (count > 0) 0 else 1) },
+            label = { Text(if (count > 1) "$label ×$count" else label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        )
+        if (count > 0) {
+            TextButton(onClick = { onChange(count - 1) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("−") }
+            TextButton(onClick = { onChange(count + 1) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("+") }
         }
     }
 }

@@ -37,10 +37,12 @@ Phone gallery ──► on-device ML Kit labelling ──► review grid ──�
     - which calendar to schedule orders in
   - **Orders tab** with upcoming orders by day. Each order has customer, date and time,
     pickup or delivery, design, size, flavour, design level, options, details, price and status.
+    A cake can be 1–5 tiers, each with its own size, flavour and toppers.
   - **Share → CakeSync:** long-press a customer's message in WhatsApp, Messenger or email and
     share it to CakeSync; the filled-in order form becomes a draft order.
-  - **Automatic prices** from your menu (flavour × size, design level, Eggless +20%, extras),
-    and **Send quote** with the total, advance and cancellation terms.
+  - **Automatic prices** from your menu (flavour × size per tier, design level, Eggless +20%,
+    extras counted per unit — 6 toppers × $8), and **Send quote** with the total, advance and
+    cancellation terms. The order shows the cake part and the options part of the price.
   - Every order is **scheduled in your calendar** (your Google Calendar, synced by Android) with
     reminders a day and 3 hours before, and updated when the order changes. Bookings already in
     the calendar can be turned into orders.
@@ -59,7 +61,8 @@ Phone gallery ──► on-device ML Kit labelling ──► review grid ──�
     template (round cakes, cupcake packs, by weight) or pasted straight from your website's
     price list.
   - Design levels with "from" prices (e.g. Fondant from $80, 3D topper from $120, Two-tier
-    from $150), plus options and extras (Eggless +20%, edible image $15 per page).
+    from $150), plus options and extras. Each option is priced **per unit** (edible image $15
+    each → count 3 pages) or as a **percentage** of the cake (Eggless +20%).
   - New photos are grouped into designs (only near-identical shots), with the best photo as
     the cover. Tap another photo to make it the cover, or split a group. Swipe to add or skip.
   - **Menu card:** branded design pages with "from" prices, plus a price-list page (flavour ×

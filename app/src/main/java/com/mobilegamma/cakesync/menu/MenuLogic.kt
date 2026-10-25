@@ -34,8 +34,46 @@ enum class TableTemplate(val label: String, val sizes: List<SizeCol>) {
 /** How elaborate a design is; [fromPrice] null means "use the price table". */
 data class DesignLevel(val id: String, val name: String, val fromPrice: Double? = null)
 
-/** An option or add-on shown on the menu, e.g. ("Eggless", "+20%") or ("Edible image", "$15 per page"). */
-data class Extra(val name: String, val price: String)
+/**
+ * An option or add-on shown on the menu, e.g. ("Eggless", "+20%") or ("Edible image", "$15 per page").
+ * [price] is the text customers read; [each] is the price of one unit when the option can be
+ * counted (6 toppers × $8), and [percent] a share of the cake price (20 for "+20%").
+ * Old menus only have the text, so [each] and [percent] may be null and the text is parsed instead.
+ */
+data class Extra(
+    val name: String,
+    val price: String = "",
+    val each: Double? = null,
+    val percent: Double? = null,
+) {
+    /** A percentage in the price text, e.g. "+20%" → 20; null when the price is a fixed amount. */
+    val percentValue: Double?
+        get() = percent ?: if (each != null) null else ExtraPrices.percent(price)
+
+    /** The fixed price of one unit (6 toppers × $8 → 8); null for percentages and blank prices. */
+    val eachValue: Double? get() = each ?: if (percentValue != null) null else ExtraPrices.amount(price)
+
+    /** Counted on an order: 2 colours, 6 toppers. Percentages never count. */
+    val counted: Boolean get() = eachValue != null
+
+    /** The same option with its price text rewritten from [each] / [percent] (what the menu shows). */
+    fun priced(currency: String): Extra = when {
+        each != null -> copy(price = (currency + Pricing.trim(each) + " each").trim(), percent = null)
+        percent != null -> copy(price = "+" + Pricing.trim(percent) + "%", each = null)
+        else -> this
+    }
+}
+
+/**
+ * Reads prices written as text, for menus saved before options had a numeric price:
+ * "+20%" → 20, "$15 per page" → 15 (ranges use the low end).
+ */
+object ExtraPrices {
+    fun percent(text: String): Double? = Regex("""(\d+(?:\.\d+)?)\s*%""").find(text)?.groupValues?.get(1)?.toDouble()
+
+    fun amount(text: String): Double? =
+        if (percent(text) != null) null else Regex("""(\d+(?:\.\d+)?)""").find(text)?.groupValues?.get(1)?.toDouble()
+}
 
 /** One design on the menu: a group of photos of the same cake. */
 data class MenuItem(

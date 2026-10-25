@@ -427,14 +427,44 @@ private fun PriceEditor(data: MenuData, categories: List<Category>, viewModel: M
         }
         Section("✨", "Options & extras") {
             Text(
-                "Shown on the price list, e.g. Eggless · +20%, Edible image · $15 per page.",
+                "Price an option per unit to count it on an order (6 toppers × $8), or as a percentage of the cake " +
+                    "price (Eggless · +20%). Counted options get − / + buttons when you quote.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             extras.forEachIndexed { i, extra ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(value = extra.name, onValueChange = { extras[i] = extra.copy(name = it) }, singleLine = true, label = { Text("Option") }, modifier = Modifier.weight(1.2f))
-                    OutlinedTextField(value = extra.price, onValueChange = { extras[i] = extra.copy(price = it) }, singleLine = true, label = { Text("Price") }, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { extras.removeAt(i) }) { Text("✕") }
+                val each = extra.eachValue != null || extra.percentValue == null
+                val number = (extra.each ?: extra.percent ?: extra.eachValue ?: extra.percentValue)?.let { Pricing.trim(it) } ?: ""
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = extra.name, onValueChange = { extras[i] = extra.copy(name = it) }, singleLine = true,
+                            label = { Text("Option, e.g. Topper simple") }, modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { extras.removeAt(i) }) { Text("✕") }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = number,
+                            onValueChange = { text ->
+                                val n = text.filter { it.isDigit() || it == '.' }.toDoubleOrNull()
+                                extras[i] = if (each) extra.copy(each = n, percent = null, price = "")
+                                else extra.copy(percent = n, each = null, price = "")
+                            },
+                            singleLine = true, label = { Text(if (each) "Price each" else "Percent") },
+                            prefix = { Text(if (each) currency else "+") }, suffix = { if (!each) Text("%") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
+                        )
+                        FilterChip(
+                            selected = each,
+                            onClick = { if (!each) extras[i] = extra.copy(each = extra.percent ?: extra.eachValue ?: 0.0, percent = null, price = "") },
+                            label = { Text("each") },
+                        )
+                        FilterChip(
+                            selected = !each,
+                            onClick = { if (each) extras[i] = extra.copy(percent = extra.each ?: extra.percentValue ?: 0.0, each = null, price = "") },
+                            label = { Text("%") },
+                        )
+                    }
                 }
             }
             TextButton(onClick = { extras += Extra("", "") }) { Text("+ Add option") }
@@ -444,15 +474,16 @@ private fun PriceEditor(data: MenuData, categories: List<Category>, viewModel: M
             OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("Terms, e.g. 50% advance · cancel 4 days before") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = currency, onValueChange = { currency = it }, singleLine = true, label = { Text("Currency symbol") }, modifier = Modifier.width(160.dp))
         }
+        val symbol = currency.trim().ifBlank { "$" }
         Button(
             onClick = {
                 viewModel.saveMenuPrices(
                     MenuSettings(
-                        currency = currency.trim().ifBlank { "$" },
+                        currency = symbol,
                         title = menuTitle.trim().ifBlank { "Our Cakes" },
                         note = note.trim(),
                         levels = levels.filter { it.name.isNotBlank() }.ifEmpty { DesignLevels.defaults },
-                        extras = extras.filter { it.name.isNotBlank() },
+                        extras = extras.filter { it.name.isNotBlank() }.map { it.priced(symbol) },
                     ),
                     tables.values.map { t -> t.copy(flavours = t.flavours.filter { it.name.isNotBlank() }) },
                 )

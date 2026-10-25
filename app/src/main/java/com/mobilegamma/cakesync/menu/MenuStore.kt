@@ -44,7 +44,14 @@ class MenuStore(context: Context) {
                 levels = s.optJSONArray("levels")?.objects()?.map { l ->
                     DesignLevel(l.getString("id"), l.getString("name"), if (l.has("from")) l.getDouble("from") else null)
                 }?.ifEmpty { null } ?: defaults.levels,
-                extras = s.optJSONArray("extras")?.objects()?.map { e -> Extra(e.getString("name"), e.optString("price")) } ?: emptyList(),
+                extras = s.optJSONArray("extras")?.objects()?.map { e ->
+                    Extra(
+                        name = e.getString("name"),
+                        price = e.optString("price"),
+                        each = if (e.has("each")) e.getDouble("each") else null,
+                        percent = if (e.has("percent")) e.getDouble("percent") else null,
+                    )
+                } ?: emptyList(),
                 servings = s.optJSONArray("servings")?.objects()?.map { SizeCol(it.getString("label"), it.optString("serves")) } ?: defaults.servings,
             ),
             tables = o.optJSONArray("tables").objects().map { t ->
@@ -84,7 +91,10 @@ class MenuStore(context: Context) {
         val o = JSONObject()
         o.put("settings", JSONObject().put("currency", st.currency).put("title", st.title).put("note", st.note)
             .put("levels", JSONArray(st.levels.map { l -> JSONObject().put("id", l.id).put("name", l.name).apply { l.fromPrice?.let { put("from", it) } } }))
-            .put("extras", JSONArray(st.extras.map { e -> JSONObject().put("name", e.name).put("price", e.price) }))
+            .put("extras", JSONArray(st.extras.map { e ->
+                JSONObject().put("name", e.name).put("price", e.price)
+                    .apply { e.each?.let { put("each", it) }; e.percent?.let { put("percent", it) } }
+            }))
             .put("servings", JSONArray(st.servings.map { JSONObject().put("label", it.label).put("serves", it.serves) })))
         o.put("tables", JSONArray(data.tables.map { t ->
             JSONObject().put("categoryId", t.categoryId)
