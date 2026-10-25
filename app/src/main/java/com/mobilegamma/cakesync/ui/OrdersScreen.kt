@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -40,7 +41,11 @@ import com.mobilegamma.cakesync.orders.OrderMessage
 import com.mobilegamma.cakesync.orders.OrderSettings
 import com.mobilegamma.cakesync.orders.OrderStatus
 import com.mobilegamma.cakesync.orders.PhoneCalendar
+import com.mobilegamma.cakesync.orders.PhotoSuggest
 import com.mobilegamma.cakesync.orders.Question
+import com.mobilegamma.cakesync.orders.Quote
+import com.mobilegamma.cakesync.orders.ServingPlanner
+import com.mobilegamma.cakesync.orders.Tier
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
@@ -240,6 +245,20 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
     var toCalendar by remember { mutableStateOf(settings.calendarId != null) }
     var confirmDelete by remember { mutableStateOf(false) }
     var showSend by remember { mutableStateOf(false) }
+    var photoNote by remember(order.id) { mutableStateOf<String?>(null) }
+    var guestsText by remember(order.id) { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    // Reads the customer's photo (tiers, toppers, print, icing colours) into the order's tiers and extras.
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        photoNote = "Reading the photo…"
+        scope.launch {
+            val (found, colours) = viewModel.readCakePhoto(uri)
+            val (updated, note) = PhotoSuggest.apply(o, found, colours, menu.settings.extras)
+            o = updated
+            photoNote = note
+        }
+    }
     val table = menu.table(o.categoryId)
     val level = menu.settings.levels.firstOrNull { it.id == o.levelId }
     val calculated = viewModel.orderTotal(o.copy(price = null), menu)
@@ -308,21 +327,68 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                             ChipRow("Category", categories.map { it.id to it.name }, o.categoryId) { o = o.copy(categoryId = it) }
                         }
                         val sizes = table?.sizes?.map { it.label }.orEmpty()
-                        if (sizes.isNotEmpty()) ChipRow("Size", sizes.map { it to it }, o.size) { o = o.copy(size = it) }
-                        else OutlinedTextField(value = o.size, onValueChange = { o = o.copy(size = it) }, singleLine = true, label = { Text("Size") }, modifier = Modifier.fillMaxWidth())
                         val flavours = table?.flavours?.map { it.name }.orEmpty()
-                        if (flavours.isNotEmpty()) ChipRow("Flavour", flavours.map { it to it }, o.flavour) { o = o.copy(flavour = it) }
-                        else OutlinedTextField(value = o.flavour, onValueChange = { o = o.copy(flavour = it) }, singleLine = true, label = { Text("Flavour") }, modifier = Modifier.fillMaxWidth())
+                        // Tier 1 is the order's size/flavour; the rest live in moreTiers.
+                        fun setTier(i: Int, t: Tier) {
+                            o = if (i == 0) o.copy(size = t.size, flavour = t.flavour) else o.copy(moreTiers = o.moreTiers.toMutableList().also { it[i - 1] = t })
+                        }
+                        o.tiers.forEachIndexed { i, t ->
+                            if (o.moreTiers.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
+                                val price = Quote.tierPrice(t, table)?.let { " · " + Pricing.format(it, menu.settings.currency) } ?: ""
+                                Text("Tier ${i + 1}$price", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                                if (i > 0) TextButton(onClick = { o = o.copy(moreTiers = o.moreTiers.filterIndexed { j, _ -> j != i - 1 }) }) { Text("Remove") }
+                            }
+                            if (sizes.isNotEmpty()) ChipRow("Size", sizes.map { it to it }, t.size) { setTier(i, t.copy(size = it)) }
+                            else OutlinedTextField(value = t.size, onValueChange = { setTier(i, t.copy(size = it)) }, singleLine = true, label = { Text("Size") }, modifier = Modifier.fillMaxWidth())
+                            if (flavours.isNotEmpty()) ChipRow("Flavour", flavours.map { it to it }, t.flavour) { setTier(i, t.copy(flavour = it)) }
+                            else OutlinedTextField(value = t.flavour, onValueChange = { setTier(i, t.copy(flavour = it)) }, singleLine = true, label = { Text("Flavour") }, modifier = Modifier.fillMaxWidth())
+                        }
+                        TextButton(onClick = { o = o.copy(moreTiers = o.moreTiers + Tier(flavour = o.flavour)) }) { Text("+ Add tier") }
+                        // Guest count → the smallest single, 2-tier and 3-tier cake that feeds everyone.
+                        OutlinedTextField(
+                            value = guestsText, onValueChange = { guestsText = it.filter(Char::isDigit) }, singleLine = true,
+                            label = { Text("Guests") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        val guests = guestsText.toIntOrNull() ?: 0
+                        if (guests > 0) {
+                            val options = ServingPlanner.options(guests, o.flavour, table, menu.settings)
+                            if (options.isEmpty()) Text("No size combination serves $guests. Set how many each size serves in Menu → Prices.", style = MaterialTheme.typography.bodySmall)
+                            FlowRowCompat {
+                                options.forEach { opt ->
+                                    val price = opt.price?.let { " · " + Pricing.format(it, menu.settings.currency) } ?: ""
+                                    AssistChip(onClick = { o = ServingPlanner.apply(o, opt) }, label = { Text("${opt.sizes.joinToString(" + ")} · serves ${opt.serves}$price") })
+                                }
+                            }
+                        }
                         ChipRow("Design level", menu.settings.levels.map { it.id to it.name }, o.levelId) { o = o.copy(levelId = it) }
                         if (menu.settings.extras.isNotEmpty()) {
                             Text("Options", style = MaterialTheme.typography.labelMedium)
                             FlowRowCompat {
                                 menu.settings.extras.forEach { e ->
                                     val on = e.name in o.options
-                                    FilterChip(selected = on, onClick = { o = o.copy(options = if (on) o.options - e.name else o.options + e.name) }, label = { Text("${e.name} ${e.price}".trim()) })
+                                    val n = o.count(e.name)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        FilterChip(
+                                            selected = on,
+                                            onClick = { o = o.copy(options = if (on) o.options - e.name else o.options + e.name, optionCounts = o.optionCounts - e.name) },
+                                            label = { Text("${e.name} ${e.price}".trim() + if (on && n > 1) " ×$n" else "") },
+                                        )
+                                        // Fixed-price extras can be counted (2 colours, 6 toppers); percentages apply once.
+                                        if (on && Quote.amountOf(e) != null) {
+                                            TextButton(onClick = { o = o.copy(optionCounts = o.optionCounts + (e.name to (n - 1).coerceAtLeast(1))) }) { Text("−") }
+                                            TextButton(onClick = { o = o.copy(optionCounts = o.optionCounts + (e.name to n + 1)) }) { Text("+") }
+                                        }
+                                    }
                                 }
                             }
                         }
+                    }
+                    Section("📷", "Customer photo") {
+                        OutlinedButton(onClick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                            Text("Suggest from photo")
+                        }
+                        Text(photoNote ?: "Fills in tiers, toppers, print and icing colours from the customer's photo, on your phone (no internet).", style = MaterialTheme.typography.bodySmall)
                     }
                     Section("📝", "Details") {
                         if (settings.asks(Question.OCCASION)) OutlinedTextField(value = o.occasion, onValueChange = { o = o.copy(occasion = it) }, singleLine = true, label = { Text("Occasion") }, modifier = Modifier.fillMaxWidth())

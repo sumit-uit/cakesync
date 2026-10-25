@@ -44,6 +44,31 @@ class OrderLogicTest {
     }
 
     @Test
+    fun tiersAndCountedExtras() {
+        val costing = menu.copy(
+            extras = listOf(
+                Extra("Eggless", "+20%"), Extra("Stacking", "$10"), Extra("Board + box", "$20"), Extra("Colour", "$5"),
+                Extra("Edible print + cut", "$30"), Extra("Topper complex", "$15"), Extra("Topper simple", "$10"),
+            ),
+        )
+        // The Mario cake: 8" + 6" Vanilla, 2 icing colours, 1 complex + 7 simple toppers.
+        val mario = Order(
+            "m", size = "8\"", flavour = "Vanilla", moreTiers = listOf(Tier("6\"", "Vanilla")),
+            options = setOf("Stacking", "Board + box", "Colour", "Edible print + cut", "Topper complex", "Topper simple"),
+            optionCounts = mapOf("Colour" to 2, "Topper simple" to 7),
+        )
+        assertEquals(290.0, Quote.calculate(mario, table, costing)!!, 1e-9)
+        // Different flavour per tier: 6" Rasmalai is $75 instead of $60.
+        assertEquals(305.0, Quote.calculate(mario.copy(moreTiers = listOf(Tier("6\"", "Rasmalai"))), table, costing)!!, 1e-9)
+        // Eggless +20% applies once, to both tiers: 135 * 0.2 = 27.
+        assertEquals(317.0, Quote.calculate(mario.copy(options = mario.options + "Eggless", optionCounts = mario.optionCounts + ("Eggless" to 3)), table, costing)!!, 1e-9)
+        // A tier without a size isn't priced yet.
+        assertNull(Quote.calculate(mario.copy(moreTiers = listOf(Tier())), table, costing))
+        assertEquals("8\" Vanilla + 6\" Vanilla", mario.cakeSummary("Simple"))
+        assertTrue(mario.optionsText().contains("Colour ×2"))
+    }
+
+    @Test
     fun parsesDatesAndTimes() {
         val today = LocalDate.of(2026, 9, 30)
         assertEquals(LocalDate.of(2026, 10, 12), OrderDates.parse("12 Oct", today))

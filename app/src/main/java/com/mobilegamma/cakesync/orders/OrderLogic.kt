@@ -67,6 +67,9 @@ data class OrderSettings(
     fun asks(q: Question) = q.key in questions
 }
 
+/** One tier of a cake: a size and flavour from the price table. */
+data class Tier(val size: String = "", val flavour: String = "")
+
 /** One customer order. */
 data class Order(
     val id: String,
@@ -82,8 +85,12 @@ data class Order(
     val size: String = "",
     val flavour: String = "",
     val levelId: String? = null,
+    /** Tiers after the first one ([size] and [flavour]); each can have its own size and flavour. */
+    val moreTiers: List<Tier> = emptyList(),
     /** Names of chosen options/extras from the menu (e.g. "Eggless"). */
     val options: Set<String> = emptySet(),
+    /** How many of a chosen option, e.g. "Colour" → 2; missing means 1. */
+    val optionCounts: Map<String, Int> = emptyMap(),
     val occasion: String = "",
     val message: String = "",
     val allergies: String = "",
@@ -100,10 +107,16 @@ data class Order(
     val fromBooking: Boolean = false,
     val createdAt: Long = 0L,
 ) {
-    /** "8" Rasmalai · Fondant" */
+    val tiers: List<Tier> get() = listOf(Tier(size, flavour)) + moreTiers
+
+    fun count(option: String): Int = optionCounts[option] ?: 1
+
+    /** "Eggless, Colour ×2" */
+    fun optionsText(): String = options.joinToString(", ") { if (count(it) > 1) "$it ×${count(it)}" else it }
+
+    /** "8" Rasmalai Fondant", or "8" Vanilla + 6" Rasmalai" for tiered cakes. */
     fun cakeSummary(levelName: String?): String = listOfNotNull(
-        size.ifBlank { null },
-        flavour.ifBlank { null },
+        tiers.map { "${it.size} ${it.flavour}".trim() }.filter { it.isNotEmpty() }.joinToString(" + ").ifBlank { null },
         levelName?.takeUnless { it.equals("Simple", true) },
     ).joinToString(" ").ifBlank { designTitle.ifBlank { "Cake" } }
 }
@@ -111,13 +124,17 @@ data class Order(
 /** Works out prices from the menu. */
 object Quote {
 
-    /** The base cake price from the price table for the order's flavour and size. */
-    fun basePrice(order: Order, table: PriceTable?): Double? {
+    /** A tier's price from the price table for its size and flavour. */
+    fun tierPrice(tier: Tier, table: PriceTable?): Double? {
         table ?: return null
-        val col = table.sizes.indexOfFirst { it.label.equals(order.size, true) }.takeIf { it >= 0 } ?: return null
-        val row = table.flavours.firstOrNull { it.name.equals(order.flavour, true) } ?: return null
+        val col = table.sizes.indexOfFirst { it.label.equals(tier.size, true) }.takeIf { it >= 0 } ?: return null
+        val row = table.flavours.firstOrNull { it.name.equals(tier.flavour, true) } ?: return null
         return row.prices.getOrNull(col)
     }
+
+    /** The base cake price: every tier from the price table, or null if any tier isn't priced. */
+    fun basePrice(order: Order, table: PriceTable?): Double? =
+        order.tiers.map { tierPrice(it, table) ?: return null }.sum()
 
     /** A percentage in an extra's price text, e.g. "+20%" → 20. */
     fun percentOf(extra: Extra): Double? = Regex("""(\d+(?:\.\d+)?)\s*%""").find(extra.price)?.groupValues?.get(1)?.toDouble()
@@ -128,14 +145,14 @@ object Quote {
 
     /**
      * Base price (at least the design level's "from" price) plus chosen options: percentages
-     * apply to the base, fixed amounts are added. Null when the base isn't known.
+     * apply to the base, fixed amounts are added once per count. Null when the base isn't known.
      */
     fun calculate(order: Order, table: PriceTable?, menu: MenuSettings): Double? {
         val level = menu.levels.firstOrNull { it.id == order.levelId }
         val base = listOfNotNull(basePrice(order, table), level?.fromPrice).maxOrNull() ?: return null
         val chosen = menu.extras.filter { it.name in order.options }
         val percent = chosen.mapNotNull { percentOf(it) }.sum()
-        val fixed = chosen.mapNotNull { amountOf(it) }.sum()
+        val fixed = chosen.sumOf { (amountOf(it) ?: 0.0) * order.count(it.name) }
         return base * (1 + percent / 100.0) + fixed
     }
 
@@ -312,7 +329,7 @@ object OrderMessage {
             append("! 🎂\n\n")
             append("• Cake: ${order.cakeSummary(levelName)}\n")
             if (order.designTitle.isNotBlank()) append("• Design: ${order.designTitle}\n")
-            if (order.options.isNotEmpty()) append("• Options: ${order.options.joinToString(", ")}\n")
+            if (order.options.isNotEmpty()) append("• Options: ${order.optionsText()}\n")
             if (order.message.isNotBlank()) append("• Message: ${order.message}\n")
             order.due?.let { d ->
                 append("• ${if (order.delivery) "Delivery" else "Pickup"}: ${OrderDates.pretty(d)}")
@@ -344,7 +361,7 @@ object OrderMessage {
         if (order.contact.isNotBlank()) append("Contact: ${order.contact}\n")
         append("Cake: ${order.cakeSummary(levelName)}\n")
         if (order.designTitle.isNotBlank()) append("Design: ${order.designTitle}\n")
-        if (order.options.isNotEmpty()) append("Options: ${order.options.joinToString(", ")}\n")
+        if (order.options.isNotEmpty()) append("Options: ${order.optionsText()}\n")
         if (order.occasion.isNotBlank()) append("Occasion: ${order.occasion}\n")
         if (order.message.isNotBlank()) append("Message on cake: ${order.message}\n")
         if (order.allergies.isNotBlank()) append("Allergies: ${order.allergies}\n")
