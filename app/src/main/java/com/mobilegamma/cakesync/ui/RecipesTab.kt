@@ -1,5 +1,10 @@
 package com.mobilegamma.cakesync.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -21,6 +26,12 @@ import com.mobilegamma.cakesync.menu.Pricing
 import com.mobilegamma.cakesync.menu.Recipe
 import com.mobilegamma.cakesync.menu.RecipeScaler
 import com.mobilegamma.cakesync.menu.RecipeStore
+import com.mobilegamma.cakesync.menu.Recipes
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
 /** Saved recipes; open one and pick another pan to see the amounts for that size. */
@@ -64,6 +75,31 @@ private fun RecipeDialog(recipe: Recipe, onDismiss: () -> Unit, onSave: (Recipe)
     var ingredients by remember { mutableStateOf(recipe.ingredients) }
     var notes by remember { mutableStateOf(recipe.notes) }
     var target by remember { mutableStateOf(recipe.pan) }
+    var scanNote by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    /** Fills the form from recipe text (pasted or read from a photo); returns a short note. */
+    fun fill(text: String): String {
+        val p = Recipes.read(text)
+        p.name?.let { if (name.isBlank()) name = it }
+        p.pan?.let { pan = it; target = it }
+        ingredients = listOf(ingredients.trimEnd(), p.ingredients).filter { it.isNotBlank() }.joinToString("\n")
+        p.notes?.let { notes = listOf(notes.trim(), it).filter { n -> n.isNotBlank() }.joinToString("\n") }
+        return "Added ${p.ingredients.lines().count { it.isNotBlank() }} ingredients" + (p.pan?.let { " for ${it.label}" } ?: "") + "."
+    }
+    val clipboard = remember { context.getSystemService(ClipboardManager::class.java) }
+    // Reads a photo of a written recipe on the phone (no internet); handwriting may need fixing up.
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scanNote = "Reading the photo…"
+        scope.launch {
+            val text = runCatching {
+                TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).use { it.process(InputImage.fromFilePath(context, uri)).await().text }
+            }.getOrNull()
+            if (text.isNullOrBlank()) { scanNote = "Couldn't read any text in that photo."; return@launch }
+            scanNote = fill(text) + " Check them, handwriting can be misread."
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -71,12 +107,24 @@ private fun RecipeDialog(recipe: Recipe, onDismiss: () -> Unit, onSave: (Recipe)
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("Name (e.g. Vanilla sponge)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("📷 Photo") }
+                    OutlinedButton(onClick = {
+                        val text = clipboard?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+                        scanNote = if (text.isNullOrBlank()) "Copy a recipe first, then tap Paste." else fill(text)
+                    }) { Text("📋 Paste") }
+                }
+                TextButton(onClick = {
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("Recipe prompt", Recipes.AI_PROMPT))
+                    scanNote = "Prompt copied. Paste it into any AI chat with your recipe, copy its answer, then tap Paste."
+                }) { Text("✨ Copy AI prompt to convert a recipe") }
+                scanNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Text("Recipe is for", fontWeight = FontWeight.Bold)
                 PanPicker(pan) { pan = it }
                 OutlinedTextField(
                     ingredients, { ingredients = it },
                     label = { Text("Ingredients, one per line") },
-                    placeholder = { Text("500 g cake mix\n270 g water\n25 g oil\n2 eggs") },
+                    placeholder = { Text(Recipes.FORMAT.lines().drop(2).dropLast(1).joinToString("\n")) },
                     minLines = 4, modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(notes, { notes = it }, label = { Text("Notes (bake time, temp…)") }, minLines = 2, modifier = Modifier.fillMaxWidth())
@@ -99,6 +147,24 @@ private fun RecipeDialog(recipe: Recipe, onDismiss: () -> Unit, onSave: (Recipe)
                 TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         },
+    )
+}
+
+/** A saved recipe sized for one order tier. */
+@Composable
+fun ScaledRecipeDialog(recipe: Recipe, pan: Pan, onDismiss: () -> Unit) {
+    val factor = RecipeScaler.factor(recipe.pan, pan)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${recipe.name} · ${pan.label}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("×${Pricing.trim((factor * 100).toLong() / 100.0)} of the ${recipe.pan.label} recipe", style = MaterialTheme.typography.bodySmall)
+                Text(RecipeScaler.scale(recipe.ingredients, factor))
+                if (recipe.notes.isNotBlank()) Text(recipe.notes, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 

@@ -33,6 +33,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mobilegamma.cakesync.menu.MenuData
 import com.mobilegamma.cakesync.menu.Pricing
+import com.mobilegamma.cakesync.menu.Pan
+import com.mobilegamma.cakesync.menu.Recipe
+import com.mobilegamma.cakesync.menu.RecipeStore
+import com.mobilegamma.cakesync.menu.Recipes
 import com.mobilegamma.cakesync.Features
 import com.mobilegamma.cakesync.orders.Booking
 import com.mobilegamma.cakesync.orders.Order
@@ -247,6 +251,8 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
     var showSend by remember { mutableStateOf(false) }
     var photoNote by remember(order.id) { mutableStateOf<String?>(null) }
     var guestsText by remember(order.id) { mutableStateOf("") }
+    val recipes = remember { RecipeStore(context).load() }
+    var showRecipe by remember { mutableStateOf<Pair<Recipe, Pan>?>(null) }
     val scope = rememberCoroutineScope()
     // Reads the customer's photo (tiers, toppers, print, icing colours) into the order's tiers and extras.
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -342,6 +348,10 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                             else OutlinedTextField(value = t.size, onValueChange = { setTier(i, t.copy(size = it)) }, singleLine = true, label = { Text("Size") }, modifier = Modifier.fillMaxWidth())
                             if (flavours.isNotEmpty()) ChipRow("Flavour", flavours.map { it to it }, t.flavour) { setTier(i, t.copy(flavour = it)) }
                             else OutlinedTextField(value = t.flavour, onValueChange = { setTier(i, t.copy(flavour = it)) }, singleLine = true, label = { Text("Flavour") }, modifier = Modifier.fillMaxWidth())
+                            Recipes.match(recipes, t.flavour)?.let { r ->
+                                val pan = Pan.parse(t.size) ?: r.pan
+                                TextButton(onClick = { showRecipe = r to pan }) { Text("📖 ${r.name} recipe for ${pan.label}") }
+                            }
                         }
                         TextButton(onClick = { o = o.copy(moreTiers = o.moreTiers + Tier(flavour = o.flavour)) }) { Text("+ Add tier") }
                         // Guest count → the smallest single, 2-tier and 3-tier cake that feeds everyone.
@@ -442,6 +452,7 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                 }
             }
         }
+        showRecipe?.let { (r, pan) -> ScaledRecipeDialog(r, pan) { showRecipe = null } }
         if (showSend) {
             val business = remember { viewModel.brandKit().businessName }
             val text = OrderMessage.quote(current, viewModel.orderTotal(current, menu), level?.name, menu.settings, settings, business)

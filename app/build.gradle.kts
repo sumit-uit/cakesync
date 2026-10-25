@@ -78,6 +78,8 @@ dependencies {
     implementation("com.google.mlkit:image-labeling:17.0.9")
     implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("com.google.mlkit:object-detection:17.0.2")
+    // Reads a photo of a written recipe into text.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     // Runs our own cake models (toppers, prints, tiers) for order photo suggestions.
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
     // Background removal; the model is delivered by Google Play services on first use.
