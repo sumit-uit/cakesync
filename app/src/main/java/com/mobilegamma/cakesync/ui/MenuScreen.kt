@@ -65,7 +65,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-private enum class MenuTab(val label: String) { NEW("New designs"), MENU("My menu"), PRICES("Prices") }
+private enum class MenuTab(val label: String) { NEW("New designs"), MENU("My menu"), PRICES("Prices"), RECIPES("Recipes") }
 
 /** Build a menu: swipe through new designs, set prices once, make a shareable menu card. */
 @Composable
@@ -89,7 +89,7 @@ fun MenuScreen(state: UiState, viewModel: MainViewModel, onClose: () -> Unit) {
                         val count = when (t) {
                             MenuTab.NEW -> " (${menu.suggestions.size})"
                             MenuTab.MENU -> " (${menu.data.items.size})"
-                            MenuTab.PRICES -> ""
+                            MenuTab.PRICES, MenuTab.RECIPES -> ""
                         }
                         FilterChip(selected = tab == t, onClick = { tab = t }, label = { Text(t.label + count) }, shape = CircleShape)
                     }
@@ -99,6 +99,7 @@ fun MenuScreen(state: UiState, viewModel: MainViewModel, onClose: () -> Unit) {
                         MenuTab.NEW -> SwipeDeck(menu, categories, viewModel, onGoToPrices = { tab = MenuTab.PRICES })
                         MenuTab.MENU -> MenuGrid(menu.data, onEdit = { editing = it })
                         MenuTab.PRICES -> PriceEditor(menu.data, categories, viewModel, onSaved = { tab = MenuTab.NEW })
+                        MenuTab.RECIPES -> RecipesTab()
                     }
                 }
             }
