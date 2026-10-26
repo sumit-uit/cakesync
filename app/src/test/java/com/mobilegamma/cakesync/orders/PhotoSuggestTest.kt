@@ -33,6 +33,30 @@ class PhotoSuggestTest {
     }
 
     @Test
+    fun readsThePhotoBackAsPrices() {
+        // Real per-unit prices: "3 simple, 2 complex, 1 super complex" is also money.
+        val priced = listOf(
+            Extra("Topper simple", each = 8.0), Extra("Topper complex", each = 15.0),
+            Extra("Topper super complex", each = 30.0), Extra("Colour", each = 5.0),
+        )
+        val found = mapOf(PhotoSuggest.SIMPLE to 3, PhotoSuggest.COMPLEX to 2, PhotoSuggest.SUPER to 1)
+        val (o, note) = PhotoSuggest.apply(Order("3", size = "8\"", flavour = "Vanilla"), found, listOf("Blue"), priced, "$")
+        assertEquals(
+            mapOf("Topper simple" to listOf(3), "Topper complex" to listOf(2), "Topper super complex" to listOf(1)),
+            o.topperPlan,
+        )
+        assertTrue(note, note.startsWith("Photo: Blue, 1 3D character · \$30, 2 complex toppers · \$30, 3 simple toppers · \$24."))
+    }
+
+    @Test
+    fun matchesA3DTopperWithoutTheWordSuper() {
+        val menu = listOf(Extra("Topper 3D", each = 30.0))
+        val (o, note) = PhotoSuggest.apply(Order("4"), mapOf(PhotoSuggest.SUPER to 1), emptyList(), menu, "$")
+        assertEquals(1, o.count("Topper 3D"))
+        assertTrue(note, note.contains("1 3D character · \$30"))
+    }
+
+    @Test
     fun keepsChosenTiersAndNamesMissingExtras() {
         val order = Order("2", moreTiers = listOf(Tier("6\"", "Rasmalai"), Tier("4\"", "Mango")))
         val (o, note) = PhotoSuggest.apply(order, mapOf(PhotoSuggest.TIERS to 2, PhotoSuggest.SIMPLE to 3), emptyList(), listOf(Extra("Eggless", "+20%")))

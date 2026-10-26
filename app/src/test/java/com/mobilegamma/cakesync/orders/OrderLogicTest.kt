@@ -50,9 +50,13 @@ class OrderLogicTest {
         var order = Order("t", size = "10\"", flavour = "Rasmalai", moreTiers = listOf(Tier("6\"", "Rasmalai")))
         assertEquals(205.0, Quote.calculate(order, table, costing)!!, 1e-9)
         val split = Quote.breakdown(order.copy(options = setOf("Eggless")), table, costing)!!
-        assertEquals(205.0, split.tiers, 1e-9)
+        assertEquals(205.0, split.cake, 1e-9)
         assertEquals(41.0, split.options, 1e-9)
         assertEquals(246.0, split.total, 1e-9)
+        // Itemised: each tier, then the option with its unit price.
+        assertEquals(listOf(130.0, 75.0), split.cakeLines.map { it.amount })
+        assertEquals(listOf("Eggless"), split.optionLines.map { it.name })
+        assertEquals("+20% of the cake", split.optionLines[0].detail("$"))
         // 6 toppers on the top tier: 205 + 48.
         order = order.withToppers(order.topTier, "Topper simple", 6)
         assertEquals(listOf(0, 6), order.topperPlan["Topper simple"])
@@ -71,6 +75,43 @@ class OrderLogicTest {
         assertTrue(order.topperPlan.isEmpty())
         assertTrue(order.optionCounts.isEmpty())
         assertEquals(205.0, Quote.calculate(order, table, costing)!!, 1e-9)
+    }
+
+    @Test
+    fun topperTotalAddsToTheTopTierAndRemovesFromItFirst() {
+        // "The customer wants 2 more simple toppers": they go on the top tier.
+        var order = Order("t", size = "8\"", flavour = "Vanilla", moreTiers = listOf(Tier("6\"", "Vanilla")))
+        order = order.withTopperTotal("Topper simple", 4)
+        assertEquals(listOf(0, 4), order.topperPlan["Topper simple"])
+        assertEquals(4, order.count("Topper simple"))
+        // Two more: top tier again.
+        order = order.withTopperTotal("Topper simple", 6)
+        assertEquals(listOf(0, 6), order.topperPlan["Topper simple"])
+        // Moving one down by hand, then a total change takes it off the top tier first.
+        order = order.withToppers(0, "Topper simple", 1)
+        assertEquals(listOf(1, 6), order.topperPlan["Topper simple"])
+        order = order.withTopperTotal("Topper simple", 5)
+        assertEquals(listOf(1, 4), order.topperPlan["Topper simple"])
+        // All the way to zero drops the option.
+        order = order.withTopperTotal("Topper simple", 0)
+        assertTrue(order.topperPlan.isEmpty())
+        assertTrue(order.options.isEmpty())
+        assertTrue(order.optionCounts.isEmpty())
+        // Asking for more than there is changes nothing.
+        assertEquals(order, order.withTopperTotal("Topper simple", -2))
+    }
+
+    @Test
+    fun pricesToppersDetectedInAPhotoOneLineEach() {
+        val costing = menu.copy(extras = listOf(Extra("Topper simple", each = 8.0), Extra("Colour", each = 5.0)))
+        val order = Order("t", size = "8\"", flavour = "Vanilla")
+            .withTopperTotal("Topper simple", 3)
+            .let { it.copy(options = it.options + "Colour", optionCounts = it.optionCounts + ("Colour" to 2)) }
+        val split = Quote.breakdown(order, table, costing)!!
+        assertEquals(listOf("Topper simple", "Colour"), split.optionLines.map { it.name })
+        assertEquals(listOf(24.0, 10.0), split.optionLines.map { it.amount })
+        assertEquals("3 × \$8", split.optionLines[0].detail("$"))
+        assertEquals(109.0, split.total, 1e-9)
     }
 
     @Test
