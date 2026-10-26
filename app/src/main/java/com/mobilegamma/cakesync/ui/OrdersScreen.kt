@@ -260,7 +260,7 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
         photoNote = "Reading the photo…"
         scope.launch {
             val (found, colours) = viewModel.readCakePhoto(uri)
-            val (updated, note) = PhotoSuggest.apply(o, found, colours, menu.settings.extras)
+            val (updated, note) = PhotoSuggest.apply(o, found, colours, menu.settings.extras, menu.settings.currency)
             o = updated
             photoNote = note
         }
@@ -441,29 +441,58 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                         OutlinedTextField(value = o.notes, onValueChange = { o = o.copy(notes = it) }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth())
                     }
                     Section("💰", "Price") {
-                        Text(
-                            calculated?.let { "From your menu: ${Pricing.format(it, menu.settings.currency)}" + (level?.name?.let { n -> " ($n)" } ?: "") }
-                                ?: "Pick a size and flavour (and set prices in Menu → Prices) to calculate",
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
-                        )
-                        Quote.breakdown(o, table, menu.settings)?.takeIf { it.options > 0 }?.let { b ->
+                        val currency = menu.settings.currency
+                        val cost = Quote.breakdown(o, table, menu.settings)
+                        val override = Pricing.parsePrice(priceText)
+                        if (cost == null) {
                             Text(
-                                "Cake ${Pricing.format(b.tiers, menu.settings.currency)} + options ${Pricing.format(b.options, menu.settings.currency)}",
-                                style = MaterialTheme.typography.bodySmall,
+                                "Pick a size and flavour (and set prices in Menu → Prices) to calculate",
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
                             )
+                        } else {
+                            Text(
+                                "From your menu: ${Pricing.format(cost.total, currency)}" + (level?.name?.let { n -> " · $n" } ?: ""),
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
+                            )
+                            cost.cakeLines.forEach { line ->
+                                PriceRow(line.name, line.detail(currency), Pricing.format(line.amount, currency))
+                            }
+                            if (cost.optionLines.isNotEmpty()) {
+                                Text("Options", style = MaterialTheme.typography.labelMedium)
+                                cost.optionLines.forEach { line ->
+                                    val option = line.option
+                                    val each = option?.let { Quote.amountOf(it) }
+                                    val bump: ((Int) -> Unit)? = if (option == null || each == null) null else { d ->
+                                        val n = line.count + d
+                                        o = if (option.name in topperNames) o.withTopperTotal(option.name, n)
+                                        else if (n > 0) o.copy(options = o.options + option.name, optionCounts = o.optionCounts + (option.name to n))
+                                        else o.copy(options = o.options - option.name, optionCounts = o.optionCounts - option.name)
+                                    }
+                                    PriceRow(line.name, line.detail(currency), Pricing.format(line.amount, currency), line.count, bump)
+                                }
+                                Text("Options add ${Pricing.format(cost.options, currency)}", style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 value = priceText, onValueChange = { priceText = it }, singleLine = true,
-                                label = { Text("Agreed price") }, prefix = { Text(menu.settings.currency) },
+                                label = { Text("Agreed price (override)") }, prefix = { Text(currency) },
                                 placeholder = { Text(calculated?.let { Pricing.trim(Math.round(it).toDouble()) } ?: "") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
                             )
                             OutlinedTextField(
                                 value = advanceText, onValueChange = { advanceText = it }, singleLine = true,
-                                label = { Text("Advance paid") }, prefix = { Text(menu.settings.currency) },
+                                label = { Text("Advance paid") }, prefix = { Text(currency) },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
                             )
+                        }
+                        if (override != null) {
+                            Text(
+                                cost?.let { "Charging ${Pricing.format(override, currency)} instead of the menu's ${Pricing.format(it.total, currency)}" }
+                                    ?: "Charging ${Pricing.format(override, currency)}",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary,
+                            )
+                            TextButton(onClick = { priceText = "" }) { Text("Use the menu price") }
                         }
                     }
                     Section("📌", "Status") {
@@ -537,6 +566,23 @@ private fun CountStepper(label: String, count: Int, onChange: (Int) -> Unit) {
             TextButton(onClick = { onChange(count - 1) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("−") }
             TextButton(onClick = { onChange(count + 1) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("+") }
         }
+    }
+}
+
+/** One priced row: what it is, how it was worked out, − n + when it can be counted, and the money. */
+@Composable
+private fun PriceRow(name: String, detail: String, amount: String, count: Int = 1, onBump: ((Int) -> Unit)? = null) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.bodyMedium)
+            if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (onBump != null) {
+            TextButton(onClick = { onBump(-1) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("−") }
+            Text("$count", style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = { onBump(1) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("+") }
+        }
+        Text(amount, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
     }
 }
 

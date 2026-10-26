@@ -42,7 +42,11 @@ Phone gallery ──► on-device ML Kit labelling ──► review grid ──�
     share it to CakeSync; the filled-in order form becomes a draft order.
   - **Automatic prices** from your menu (flavour × size per tier, design level, Eggless +20%,
     extras counted per unit — 6 toppers × $8), and **Send quote** with the total, advance and
-    cancellation terms. The order shows the cake part and the options part of the price.
+    cancellation terms. The price breaks down line by line — each tier, then every option with
+    its count and per-unit cost ("3 simple toppers × $8 = $24") — and each counted line has
+    − n + right there, so "the customer wants 2 more toppers" is two taps and the total follows.
+    Scanning a customer's photo reports what it saw with prices ("3 simple toppers · $24"), and
+    an **Agreed price (override)** wins over the menu price, with **Use the menu price** to go back.
   - Every order is **scheduled in your calendar** (your Google Calendar, synced by Android) with
     reminders a day and 3 hours before, and updated when the order changes. Bookings already in
     the calendar can be turned into orders.
