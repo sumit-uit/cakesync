@@ -6,6 +6,7 @@ import android.app.TimePickerDialog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -24,13 +25,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.mobilegamma.cakesync.menu.MenuData
 import com.mobilegamma.cakesync.menu.Pricing
 import com.mobilegamma.cakesync.menu.Pan
@@ -42,6 +49,7 @@ import com.mobilegamma.cakesync.orders.Booking
 import com.mobilegamma.cakesync.orders.Order
 import com.mobilegamma.cakesync.orders.OrderDates
 import com.mobilegamma.cakesync.orders.OrderMessage
+import com.mobilegamma.cakesync.orders.OrderPhotos
 import com.mobilegamma.cakesync.orders.OrderSettings
 import com.mobilegamma.cakesync.orders.OrderStatus
 import com.mobilegamma.cakesync.orders.PhoneCalendar
@@ -62,6 +70,10 @@ fun OrdersScreen(state: UiState, viewModel: MainViewModel) {
     var showForm by remember { mutableStateOf(false) }
     var showBookings by remember { mutableStateOf(false) }
     val menu = remember(state.orders) { viewModel.menuData() }
+    // A customer's reference photo → a saved order with the picture and the details it can read.
+    val pickOrderPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) viewModel.createOrderFromPhoto(uri)
+    }
     val today = LocalDate.now()
     val shown = state.orders
         .filter { o -> if (showPast) !o.status.active || (o.due?.isBefore(today) == true) else o.status.active && (o.due == null || !o.due.isBefore(today)) }
@@ -92,6 +104,7 @@ fun OrdersScreen(state: UiState, viewModel: MainViewModel) {
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = viewModel::newOrder) { Text("+ New order") }
+                OutlinedButton(onClick = { pickOrderPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("📷 From photo") }
                 OutlinedButton(onClick = { showBookings = true; viewModel.loadBookings() }, enabled = settings.calendarId != null) { Text("📅 From calendar") }
                 OutlinedButton(onClick = { showForm = true }) { Text("📨 Order form") }
             }
@@ -140,8 +153,13 @@ fun OrdersScreen(state: UiState, viewModel: MainViewModel) {
 private fun OrderCard(order: Order, menu: MenuData, viewModel: MainViewModel) {
     val level = menu.settings.levels.firstOrNull { it.id == order.levelId }?.name
     val total = viewModel.orderTotal(order, menu)
+    val reference = order.references.firstOrNull { OrderPhotos.isLocal(it) }
     Card(onClick = { viewModel.editOrder(order) }, shape = MaterialTheme.shapes.large) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (reference != null) {
+                ReferenceThumb(reference, size = 64.dp)
+                Spacer(Modifier.width(12.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text(order.customer.ifBlank { "Customer" }, style = MaterialTheme.typography.titleMedium)
                 Text(order.cakeSummary(level), style = MaterialTheme.typography.bodyMedium)
@@ -250,19 +268,31 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
     var confirmDelete by remember { mutableStateOf(false) }
     var showSend by remember { mutableStateOf(false) }
     var photoNote by remember(order.id) { mutableStateOf<String?>(null) }
+    var showPhoto by remember(order.id) { mutableStateOf<String?>(null) }
     var guestsText by remember(order.id) { mutableStateOf("") }
     val recipes = remember { RecipeStore(context).load() }
     var showRecipe by remember { mutableStateOf<Pair<Recipe, Pan>?>(null) }
     val scope = rememberCoroutineScope()
-    // Reads the customer's photo (tiers, toppers, print, icing colours) into the order's tiers and extras.
+    // Reads the customer's photo (tiers, toppers, print, icing colours) into the order's tiers
+    // and extras, and keeps the picture with the order as its design reference.
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         photoNote = "Reading the photo…"
         scope.launch {
             val (found, colours) = viewModel.readCakePhoto(uri)
             val (updated, note) = PhotoSuggest.apply(o, found, colours, menu.settings.extras, menu.settings.currency)
-            o = updated
+            val path = viewModel.saveReference(uri, o.id)
+            o = updated.copy(references = updated.references + listOfNotNull(path))
             photoNote = note
+        }
+    }
+    // Just keeps the picture (a second angle, or one the reader can't make sense of).
+    val pickExtra = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val path = viewModel.saveReference(uri, o.id)
+            if (path != null) o = o.copy(references = o.references + path)
+            else photoNote = "That photo couldn't be read."
         }
     }
     val table = menu.table(o.categoryId)
@@ -395,7 +425,7 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                         val shownExtras = menu.settings.extras.filter { !(multiTier && it.name in countedToppers) }
                         if (shownExtras.isNotEmpty()) {
                             Text(
-                                if (multiTier && countedToppers.isNotEmpty()) "Options (toppers are set per tier above)" else "Options",
+                                "Options & extras" + if (multiTier && countedToppers.isNotEmpty()) " (toppers are set per tier above)" else "",
                                 style = MaterialTheme.typography.labelMedium,
                             )
                             FlowRowCompat {
@@ -425,11 +455,28 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                             }
                         }
                     }
-                    Section("📷", "Customer photo") {
-                        OutlinedButton(onClick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                            Text("Suggest from photo")
+                    Section("🖼", "Design reference") {
+                        val localPhotos = o.references.filter { OrderPhotos.isLocal(it) }
+                        if (localPhotos.isNotEmpty()) {
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                localPhotos.forEach { path ->
+                                    ReferenceThumb(path, onClick = { showPhoto = path })
+                                }
+                            }
                         }
-                        Text(photoNote ?: "Fills in tiers, toppers, print and icing colours from the customer's photo, on your phone (no internet).", style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                                Text("📷 Fill from photo")
+                            }
+                            OutlinedButton(onClick = { pickExtra.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                                Text(if (o.references.isEmpty()) "Add photo" else "Add another")
+                            }
+                        }
+                        Text(
+                            photoNote ?: "Fills in tiers, toppers, print and icing colours from the customer's photo, on your phone (no internet). " +
+                                "The picture is kept with the order — tap it to see it full size.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     Section("📝", "Details") {
                         if (settings.asks(Question.OCCASION)) OutlinedTextField(value = o.occasion, onValueChange = { o = o.copy(occasion = it) }, singleLine = true, label = { Text("Occasion") }, modifier = Modifier.fillMaxWidth())
@@ -450,28 +497,29 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
                                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
                             )
                         } else {
-                            Text(
-                                "From your menu: ${Pricing.format(cost.total, currency)}" + (level?.name?.let { n -> " · $n" } ?: ""),
-                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
-                            )
+                            // An invoice: cake, options, then what they add up to.
+                            if (cost.cakeLines.size > 1) {
+                                PriceTotalRow("Cake" + (level?.name?.let { " · $it" } ?: ""), Pricing.format(cost.cake, currency))
+                            }
                             cost.cakeLines.forEach { line ->
-                                PriceRow(line.name, line.detail(currency), Pricing.format(line.amount, currency))
+                                PriceRow(line.name, line.detail(currency), Pricing.format(line.amount, currency), indent = cost.cakeLines.size > 1)
                             }
-                            if (cost.optionLines.isNotEmpty()) {
-                                Text("Options", style = MaterialTheme.typography.labelMedium)
-                                cost.optionLines.forEach { line ->
-                                    val option = line.option
-                                    val each = option?.let { Quote.amountOf(it) }
-                                    val bump: ((Int) -> Unit)? = if (option == null || each == null) null else { d ->
-                                        val n = line.count + d
-                                        o = if (option.name in topperNames) o.withTopperTotal(option.name, n)
-                                        else if (n > 0) o.copy(options = o.options + option.name, optionCounts = o.optionCounts + (option.name to n))
-                                        else o.copy(options = o.options - option.name, optionCounts = o.optionCounts - option.name)
-                                    }
-                                    PriceRow(line.name, line.detail(currency), Pricing.format(line.amount, currency), line.count, bump)
+                            if (cost.optionLines.size > 1) {
+                                PriceTotalRow("Options & extras", Pricing.format(cost.options, currency))
+                            }
+                            cost.optionLines.forEach { line ->
+                                val option = line.option
+                                val each = option?.let { Quote.amountOf(it) }
+                                val bump: ((Int) -> Unit)? = if (option == null || each == null) null else { d ->
+                                    val n = line.count + d
+                                    o = if (option.name in topperNames) o.withTopperTotal(option.name, n)
+                                    else if (n > 0) o.copy(options = o.options + option.name, optionCounts = o.optionCounts + (option.name to n))
+                                    else o.copy(options = o.options - option.name, optionCounts = o.optionCounts - option.name)
                                 }
-                                Text("Options add ${Pricing.format(cost.options, currency)}", style = MaterialTheme.typography.bodySmall)
+                                PriceRow(line.name, line.detail(currency), Pricing.format(line.amount, currency), line.count, bump, indent = cost.optionLines.size > 1)
                             }
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                            PriceTotalRow("Total from your menu", Pricing.format(cost.total, currency), bold = true)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
@@ -519,6 +567,17 @@ fun OrderEditor(order: Order, state: UiState, viewModel: MainViewModel) {
             }
         }
         showRecipe?.let { (r, pan) -> ScaledRecipeDialog(r, pan) { showRecipe = null } }
+        showPhoto?.let { path ->
+            ReferenceDialog(
+                path = path,
+                onRemove = {
+                    o = o.copy(references = (o.references - path))
+                    viewModel.deleteReference(path)
+                    showPhoto = null
+                },
+                onDismiss = { showPhoto = null },
+            )
+        }
         if (showSend) {
             val business = remember { viewModel.brandKit().businessName }
             val text = OrderMessage.quote(current, viewModel.orderTotal(current, menu), level?.name, menu.settings, settings, business)
@@ -571,8 +630,11 @@ private fun CountStepper(label: String, count: Int, onChange: (Int) -> Unit) {
 
 /** One priced row: what it is, how it was worked out, − n + when it can be counted, and the money. */
 @Composable
-private fun PriceRow(name: String, detail: String, amount: String, count: Int = 1, onBump: ((Int) -> Unit)? = null) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+private fun PriceRow(name: String, detail: String, amount: String, count: Int = 1, onBump: ((Int) -> Unit)? = null, indent: Boolean = false) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = if (indent) 12.dp else 0.dp),
+    ) {
         Column(Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodyMedium)
             if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -583,6 +645,58 @@ private fun PriceRow(name: String, detail: String, amount: String, count: Int = 
             TextButton(onClick = { onBump(1) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("+") }
         }
         Text(amount, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+/** A subtotal or the total: label on the left, money on the right. */
+@Composable
+private fun PriceTotalRow(label: String, amount: String, bold: Boolean = false) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            style = if (bold) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelLarge,
+            modifier = Modifier.weight(1f),
+        )
+        Text(amount, style = if (bold) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelLarge)
+    }
+}
+
+/** A reference photo the order keeps: tap to see it full size. */
+@Composable
+private fun ReferenceThumb(path: String, size: Dp = 96.dp, onClick: (() -> Unit)? = null) {
+    val bitmap by produceState<ImageBitmap?>(null, path) {
+        value = withContext(Dispatchers.IO) { OrderPhotos.load(path, 320)?.asImageBitmap() }
+    }
+    Box(
+        Modifier.size(size).clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+    ) {
+        bitmap?.let {
+            Image(it, contentDescription = "Reference photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+/** The full reference photo, with a way to drop it from the order. */
+@Composable
+private fun ReferenceDialog(path: String, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    val bitmap by produceState<ImageBitmap?>(null, path) {
+        value = withContext(Dispatchers.IO) { OrderPhotos.load(path, 1600)?.asImageBitmap() }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(16.dp)) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                bitmap?.let {
+                    Image(it, contentDescription = "Reference photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onRemove) { Text("Remove photo", color = MaterialTheme.colorScheme.error) }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("Close") }
+                }
+            }
+        }
     }
 }
 
