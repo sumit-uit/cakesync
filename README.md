@@ -38,6 +38,10 @@ Phone gallery ──► on-device ML Kit labelling ──► review grid ──�
   - **Orders tab** with upcoming orders by day. Each order has customer, date and time,
     pickup or delivery, design, size, flavour, design level, options, details, price and status.
     A cake can be 1–5 tiers, each with its own size, flavour and toppers.
+  - **📷 From photo** on the Orders tab: send a customer's reference picture and it becomes a
+    saved order — the picture is kept with the order (shown on its card, tap to see it full size),
+    the tiers, toppers and icing colours the app can see are filled in, and the baker edits
+    anything it got wrong. Orders opened from the list get the same reference photos.
   - **Share → CakeSync:** long-press a customer's message in WhatsApp, Messenger or email and
     share it to CakeSync; the filled-in order form becomes a draft order.
   - **Automatic prices** from your menu (flavour × size per tier, design level, Eggless +20%,

@@ -31,6 +31,8 @@ import com.mobilegamma.cakesync.orders.OrderMessage
 import com.mobilegamma.cakesync.orders.OrderSettings
 import com.mobilegamma.cakesync.orders.OrderStore
 import com.mobilegamma.cakesync.orders.PhoneCalendar
+import com.mobilegamma.cakesync.orders.PhotoSuggest
+import com.mobilegamma.cakesync.orders.OrderPhotos
 import com.mobilegamma.cakesync.orders.Quote
 import com.mobilegamma.cakesync.menu.CardOptions
 import com.mobilegamma.cakesync.menu.ColourNames
@@ -253,6 +255,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun menuData(): MenuData = menuStore.load()
+
+    /**
+     * A customer's reference photo becomes an order: the picture is kept with it, the tiers,
+     * toppers and colours the app can see are filled in, and it is saved straight away so the
+     * baker can open it and change anything the photo got wrong.
+     */
+    fun createOrderFromPhoto(uri: Uri) {
+        _state.update { it.copy(message = "Reading the photo…") }
+        viewModelScope.launch {
+            val (found, colours) = readCakePhoto(uri)
+            val menu = menuStore.load()
+            val id = "o${System.currentTimeMillis()}"
+            val (filled, note) = PhotoSuggest.apply(
+                Order(id = id, createdAt = System.currentTimeMillis()),
+                found, colours, menu.settings.extras, menu.settings.currency,
+            )
+            val path = withContext(Dispatchers.IO) { OrderPhotos.save(getApplication(), uri, id) }
+            val draft = filled.copy(references = filled.references + listOfNotNull(path))
+            withContext(Dispatchers.IO) { orderStore.update { d -> d.copy(orders = d.orders + draft) } }
+            _state.update { it.copy(editingOrder = draft, message = note) }
+            loadOrders()
+        }
+    }
+
+    /** Keeps a picked picture with an order that is being edited; returns the path to store. */
+    suspend fun saveReference(uri: Uri, orderId: String): String? =
+        withContext(Dispatchers.IO) { OrderPhotos.save(getApplication(), uri, orderId) }
+
+    /** Drops a reference photo the baker removed from an order. */
+    fun deleteReference(path: String) {
+        viewModelScope.launch(Dispatchers.IO) { OrderPhotos.delete(path) }
+    }
 
     /** The total for [order]: its agreed price, else the price from the menu. */
     fun orderTotal(order: Order, menu: MenuData = menuStore.load()): Double? =
